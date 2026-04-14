@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net6.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<BepInExPluginGuid>com.fambook.vrising</BepInExPluginGuid>
+		<AssemblyName>FamBook</AssemblyName>
+		<Version>1.5.1</Version>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+		<LangVersion>preview</LangVersion>
+		<RestoreSources>
+			https://api.nuget.org/v3/index.json;
+			https://nuget.bepinex.dev/v3/index.json;
+		</RestoreSources>
+		<Nullable>enable</Nullable>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="BepInEx.PluginInfoProps" Version="2.1.0" />
+		<PackageReference Include="BepInEx.Unity.IL2CPP" Version="6.0.0-be.733" />
+		<PackageReference Include="VampireReferenceAssemblies" Version="1.1.11-r96495-b8" />
+	</ItemGroup>
+
+	<!-- Auto-copy DLL to VRising BepInEx plugins after build -->
+	<Target Name="BuildToClient" AfterTargets="Build">
+		<Copy SourceFiles="$(TargetDir)$(ProjectName).dll"
+		      DestinationFolder="C:\Program Files (x86)\Steam\steamapps\common\VRising\BepInEx\plugins"
+		      Condition="Exists('C:\Program Files (x86)\Steam\steamapps\common\VRising\BepInEx\plugins')" />
+		<Copy SourceFiles="$(TargetDir)$(ProjectName).dll"
+		      DestinationFolder="D:\Steam\steamapps\common\VRising\BepInEx\plugins"
+		      Condition="Exists('D:\Steam\steamapps\common\VRising\BepInEx\plugins')" />
+	</Target>
+
+</Project>
