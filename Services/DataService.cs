@@ -40,6 +40,11 @@ internal static class DataService
     static readonly List<FamiliarEntry> _pendingEntries = [];
     static string _pendingBoxName = string.Empty;
 
+    // ── List boxes state ──────────────────────────────────────────────────────
+    public static bool AwaitingListBoxes { get; private set; } = false;
+    static readonly List<string> _pendingBoxNames = [];
+    public static readonly List<string> LastListedBoxNames = [];
+
     // ── Bind attempt state ────────────────────────────────────────────────────
 
     public static bool AwaitingBindAttempt { get; private set; } = false;
@@ -115,7 +120,7 @@ internal static class DataService
     {
         if (string.IsNullOrWhiteSpace(raw)) return false;
 
-        // Check for bind error if awaiting bind attempt
+        // 1) Bind attempt handling (highest priority)
         if (AwaitingBindAttempt)
         {
             if (raw.Contains("you already have an active familiar") || raw.Contains("Unbind that one first"))
@@ -129,6 +134,74 @@ internal static class DataService
             return false;
         }
 
+        // 2) List boxes handling
+        if (AwaitingListBoxes)
+        {
+            if (Time.realtimeSinceStartup > _responseDeadline) return false;
+
+            // Strip any rich tags
+            string stripped = StripTags(raw);
+            if (string.IsNullOrWhiteSpace(stripped)) return false;
+
+            // Ignore header line
+            if (stripped.StartsWith("Familiar Boxes", System.StringComparison.OrdinalIgnoreCase))
+            {
+                // extend deadline in case names follow
+                _responseDeadline = Time.realtimeSinceStartup + EXTEND_EACH;
+                return true;
+            }
+
+            // Ignore confirmation lines like "Box Selected - boxN"
+            if (_boxSelectedRx.IsMatch(raw)) return true;
+
+            // Ignore familiar lines (they contain '|') and box header lines ending with ':'
+            if (stripped.Contains("|") || stripped.EndsWith(":"))
+            {
+                _responseDeadline = Time.realtimeSinceStartup + EXTEND_EACH;
+                return true;
+            }
+
+            // If the line contains comma-separated tokens, split and add each cleaned token
+            if (stripped.Contains(","))
+            {
+                var parts = stripped.Split(',');
+                foreach (var p in parts)
+                {
+                    var tok = CleanBoxToken(p);
+                    if (!string.IsNullOrWhiteSpace(tok) && !_pendingBoxNames.Contains(tok))
+                    {
+                        _pendingBoxNames.Add(tok);
+                        Core.Log.LogInfo($"[FamBook] Parsed box token: {tok}");
+                    }
+                }
+
+                _responseDeadline = Time.realtimeSinceStartup + EXTEND_EACH;
+                return true;
+            }
+
+            // Single token line (likely a box name)
+            var token = CleanBoxToken(stripped);
+            if (!string.IsNullOrWhiteSpace(token) && !_pendingBoxNames.Contains(token))
+            {
+                _pendingBoxNames.Add(token);
+                Core.Log.LogInfo($"[FamBook] Parsed box token: {token}");
+            }
+
+            _responseDeadline = Time.realtimeSinceStartup + EXTEND_EACH;
+            return true;
+        }
+
+        static string CleanBoxToken(string s)
+        {
+            var t = s.Trim();
+            // remove trailing colon or surrounding brackets
+            if (t.EndsWith(":")) t = t.Substring(0, t.Length - 1).Trim();
+            // strip any remaining tags or stray punctuation
+            t = System.Text.RegularExpressions.Regex.Replace(t, "[\n\r\t\\\"']", string.Empty).Trim();
+            return t;
+        }
+
+        // 3) Normal .fam l response handling
         if (!AwaitingResponse) return false;
         if (Time.realtimeSinceStartup > _responseDeadline) return false;
 
@@ -170,6 +243,33 @@ internal static class DataService
         return false;
     }
 
+    static string StripTags(string s) => System.Text.RegularExpressions.Regex.Replace(s, "<.*?>", string.Empty).Trim();
+
+    /// <summary>Begin awaiting the server's response to ".fam listboxes".</summary>
+    public static void BeginAwaitingBoxList()
+    {
+        _pendingBoxNames.Clear();
+        _responseDeadline = Time.realtimeSinceStartup + BASE_WINDOW;
+        AwaitingListBoxes = true;
+        Core.Log.LogInfo("[FamBook] Awaiting .fam listboxes response...");
+    }
+
+    /// <summary>Finalize the captured listboxes once the deadline expires.</summary>
+    public static void FinalizeListIfExpired()
+    {
+        if (!AwaitingListBoxes) return;
+        if (Time.realtimeSinceStartup < _responseDeadline) return;
+
+        LastListedBoxNames.Clear();
+        LastListedBoxNames.AddRange(_pendingBoxNames);
+
+        _pendingBoxNames.Clear();
+        AwaitingListBoxes = false;
+        IsDirty = true;
+
+        Core.Log.LogInfo($"[FamBook] Finalised listboxes: {LastListedBoxNames.Count} boxes.");
+    }
+
     /// <summary>Called from UpdateLoop; finalises collection once the deadline has passed.</summary>
     public static void FinalizeIfExpired()
     {
@@ -204,6 +304,11 @@ internal static class DataService
         PendingBindFamiliarNumber = 0;
         _pendingEntries.Clear();
         _pendingBoxName   = string.Empty;
+
+        // Clear listboxes state
+        AwaitingListBoxes = false;
+        _pendingBoxNames.Clear();
+        LastListedBoxNames.Clear();
     }
 }
 

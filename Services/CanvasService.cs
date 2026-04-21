@@ -39,6 +39,11 @@ internal class CanvasService
 
     static readonly System.Collections.Generic.List<FamiliarCard> _cards = [];
 
+    // UI state for showing server-listed boxes (paginated)
+    static bool _showingBoxList = false;
+    static int  _boxListPage = 0; // 0-based page index (10 per page)
+    static int  _currentListedBoxIndex = -1; // global index into DataService.LastListedBoxNames (or -1 if unset)
+
     internal CanvasService(UICanvasBase canvas)
     {
         // Ensure static state from any previous instance is reset so the update loop
@@ -82,6 +87,12 @@ internal class CanvasService
             if (_ready)
             {
                 DataService.FinalizeIfExpired();
+                DataService.FinalizeListIfExpired();
+n                // If we've just finalized a box list, initialize current listed index so Next/Prev open boxes correctly.
+                if (_showingBoxList && _currentListedBoxIndex == -1 && DataService.LastListedBoxNames.Count > 0)
+                {
+                    _currentListedBoxIndex = 0;
+                }
 
                 if (_bookOpen && DataService.IsDirty)
                 {
@@ -182,7 +193,31 @@ internal class CanvasService
         titleTMP.fontSize = 12f;
         titleTMP.alignment = TextAlignmentOptions.Left;
         titleTMP.enableWordWrapping = false;
-        Frac(titleGO, 0.05f, 0.1f, 0.85f, 0.9f, 8, 0, 3, 3);
+        Frac(titleGO, 0.05f, 0.1f, 0.60f, 0.9f, 8, 0, 3, 3);
+
+        // Boxes button (top)
+        var boxesGO = MakeChild("BoxesBtn", header.transform);
+        boxesGO.AddComponent<Image>().color = Color.clear;
+        Frac(boxesGO, 0.60f, 0f, 0.75f, 1f, 0, 4, 2, 2);
+        var boxesTMP = MakeChild("BoxesTxt", boxesGO.transform).AddComponent<TextMeshProUGUI>();
+        boxesTMP.text = "Boxes";
+        boxesTMP.fontSize = 12f;
+        boxesTMP.alignment = TextAlignmentOptions.Center;
+        boxesTMP.enableWordWrapping = false;
+        FillParent(boxesTMP.gameObject);
+        boxesGO.AddComponent<Button>().onClick.AddListener((UnityAction)OnBoxesClicked);
+
+        // VBlood button (top)
+        var vbloodGO = MakeChild("VBloodBtn", header.transform);
+        vbloodGO.AddComponent<Image>().color = Color.clear;
+        Frac(vbloodGO, 0.75f, 0f, 0.88f, 1f, 0, 4, 2, 2);
+        var vbloodTMP = MakeChild("VBloodTxt", vbloodGO.transform).AddComponent<TextMeshProUGUI>();
+        vbloodTMP.text = "VBlood";
+        vbloodTMP.fontSize = 12f;
+        vbloodTMP.alignment = TextAlignmentOptions.Center;
+        vbloodTMP.enableWordWrapping = false;
+        FillParent(vbloodTMP.gameObject);
+        vbloodGO.AddComponent<Button>().onClick.AddListener((UnityAction)OnVBloodClicked);
 
         var closeGO = MakeChild("CloseBtn", header.transform);
         closeGO.AddComponent<Image>().color = Color.clear;
@@ -278,6 +313,23 @@ internal class CanvasService
         rt.offsetMax = Vector2.zero;
     }
 
+    static void OnBoxesClicked()
+    {
+        // Open the book and request the server's list of boxes. Responses will be intercepted and parsed.
+        OpenBook();
+        _showingBoxList = true;
+        _boxListPage = 0;
+        CommandSender.Send(".fam listboxes");
+        DataService.BeginAwaitingBoxList();
+    }
+
+    static void OnVBloodClicked()
+    {
+        // Send a vblood command — server/mod handlers can respond as needed
+        CommandSender.Send(".vblood");
+        Core.Log.LogInfo("[FamBook] VBlood command sent via button.");
+    }
+
     static void OnIconClicked()
     {
         if (_bookOpen) CloseBook();
@@ -288,7 +340,11 @@ internal class CanvasService
     {
         _bookOpen = true;
         _bookPanel?.SetActive(true);
-        RequestCurrentBox();
+        // Default to showing the boxes list when opening the FamBook UI.
+        _showingBoxList = true;
+        _boxListPage = 0;
+        CommandSender.Send(".fam listboxes");
+        DataService.BeginAwaitingBoxList();
     }
 
     static void CloseBook()
@@ -299,6 +355,36 @@ internal class CanvasService
 
     static void OnPrevPage()
     {
+        if (_showingBoxList)
+        {
+            // If we have a maintained list, navigate boxes; otherwise page the UI.
+            int total = DataService.LastListedBoxNames.Count;
+            if (total > 0)
+            {
+                if (_currentListedBoxIndex <= 0)
+                {
+                    // already at first, clamp
+                    _currentListedBoxIndex = 0;
+                }
+                else
+                {
+                    _currentListedBoxIndex--;
+                }
+
+                // Open the selected box
+                OpenBoxByIndex(_currentListedBoxIndex);
+                return;
+            }
+
+            // fallback to paging
+            if (_boxListPage > 0)
+            {
+                _boxListPage--;
+                RefreshBookPage();
+            }
+            return;
+        }
+
         if (DataService.CurrentBoxIndex > 0)
         {
             DataService.CurrentBoxIndex--;
@@ -308,6 +394,18 @@ internal class CanvasService
 
     static void OnNextPage()
     {
+        if (_showingBoxList)
+        {
+            int total = DataService.LastListedBoxNames.Count;
+            int maxPage = Math.Max(0, (total - 1) / MAX_CARDS);
+            if (_boxListPage < maxPage)
+            {
+                _boxListPage++;
+                RefreshBookPage();
+            }
+            return;
+        }
+
         DataService.CurrentBoxIndex++;
         RequestCurrentBox();
     }
@@ -316,6 +414,35 @@ internal class CanvasService
 
     static void RefreshBookPage()
     {
+        // If we're showing the server-provided boxes list, show a paginated view of DataService.LastListedBoxNames
+        if (_showingBoxList && DataService.LastListedBoxNames.Count > 0)
+        {
+            int total = DataService.LastListedBoxNames.Count;
+            int start = _boxListPage * MAX_CARDS;
+            int shown = Math.Min(MAX_CARDS, Math.Max(0, total - start));
+
+            if (_pageLabel != null)
+                _pageLabel.SetText($"<color=#CCBBAA>Boxes {start + 1}-{start + shown} of {total}</color>");
+
+            for (int i = 0; i < _cards.Count; i++)
+            {
+                int idx = start + i;
+                if (idx < total)
+                {
+                    string boxName = DataService.LastListedBoxNames[idx];
+                    _cards[i].UpdateBox(boxName, idx + 1, OnBoxClicked);
+                    _cards[i].SetVisible(true);
+                }
+                else
+                {
+                    _cards[i].SetVisible(false);
+                }
+            }
+
+            Core.Log.LogInfo($"[FamBook] Boxes refreshed: showing {shown} of {total} boxes (page {_boxListPage + 1}).");
+            return;
+        }
+
         int boxIdx = DataService.CurrentBoxIndex;
 
         System.Collections.Generic.List<FamiliarEntry> familiars = [];
@@ -353,6 +480,21 @@ internal class CanvasService
         Core.Log.LogInfo($"[FamBook] Clicked familiar #{famNumber} ({familiarName}) -> .fam b {famNumber}");
     }
 
+    static void OnBoxClicked(int boxNumber, string boxName)
+    {
+        if (string.IsNullOrWhiteSpace(boxName)) return;
+
+        // When a box is clicked in the boxes list, request its familiars and switch to normal book view.
+        _showingBoxList = false;
+        _boxListPage = 0;
+        // boxName may include commas or spaces if parsing joined lines; ensure we send just the box token if present.
+        // If names are like "box1" it's fine; otherwise send as-is.
+        CommandSender.Send($".fam cb {boxName}");
+        CommandSender.Send(".fam l");
+        DataService.BeginAwaitingResponse();
+        Core.Log.LogInfo($"[FamBook] Requested familiars for box '{boxName}' via button.");
+    }
+
     public static void ResetState()
     {
         _killSwitch = true;
@@ -363,8 +505,10 @@ internal class CanvasService
         Destroy(_bookPanel); _bookPanel = null;
         _cardsContainer = null;
         _cards.Clear();
-
-        DataService.Reset();
+        // Reset boxes UI state
+        _showingBoxList = false;
+        _boxListPage = 0;
+        DataService.Reset();
         CommandSender.Reset();
 
         Core.Log.LogInfo("[FamBook] State reset.");
@@ -446,6 +590,15 @@ internal sealed class FamiliarCard
 
         _button.onClick.RemoveAllListeners();
         _button.onClick.AddListener((UnityAction)(() => onClick(famNumber, f.Name)));
+    }
+
+    // Update card for listing box names (from .fam listboxes)
+    public void UpdateBox(string boxName, int boxNumber, Action<int, string> onClick)
+    {
+        _nameText.SetText($"<color=#90EE90>{boxName}</color>");
+        _infoText.SetText($"# {boxNumber}");
+        _button.onClick.RemoveAllListeners();
+        _button.onClick.AddListener((UnityAction)(() => onClick(boxNumber, boxName)));
     }
 
     public void SetVisible(bool v) => _root.SetActive(v);
