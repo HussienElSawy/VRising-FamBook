@@ -60,9 +60,10 @@ internal static class DataService
         @"^<color=white>(.+)</color>:$",
         RegexOptions.Compiled);
 
-    // Box selected confirmation: Box Selected - <color=white>boxN</color>
+    // Box selected confirmation: Box Selected - <color=white>Name</color>
+    // Capture any name (numeric or not). Numeric names will update CurrentBoxIndex.
     static readonly Regex _boxSelectedRx = new(
-        @"^Box Selected - <color=white>box(\d+)</color>$",
+        @"^Box Selected - <color=white>(.+)</color>$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     // Familiar line (no shiny):   <color=yellow>N</color>| <color=green>Name</color> [<color=white>level</color>][optional prestige]
@@ -209,9 +210,27 @@ internal static class DataService
         var selMatch = _boxSelectedRx.Match(raw);
         if (selMatch.Success)
         {
-            int parsed = ParseInt(selMatch.Groups[1].Value);
-            if (parsed > 0) CurrentBoxIndex = parsed - 1;
-            Core.Log.LogInfo($"[FamBook] Box selected: {CurrentBoxIndex + 1}");
+            string selName = selMatch.Groups[1].Value.Trim();
+            // If the captured name is numeric like "box12" or just a number, try to set index.
+            // Support forms like "box12" -> 12, or "12" -> 12.
+            int parsed = 0;
+            var m = System.Text.RegularExpressions.Regex.Match(selName, @"box(\d+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (!m.Success)
+                int.TryParse(selName, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out parsed);
+            else
+                parsed = ParseInt(m.Groups[1].Value);
+
+            if (parsed > 0)
+            {
+                CurrentBoxIndex = parsed - 1;
+                Core.Log.LogInfo($"[FamBook] Box selected: {CurrentBoxIndex + 1}");
+            }
+            else
+            {
+                // Non-numeric box name selected; record pending box name so subsequent fam lines attach correctly.
+                _pendingBoxName = selName;
+                Core.Log.LogInfo($"[FamBook] Box selected: {selName}");
+            }
             return true;
         }
 
