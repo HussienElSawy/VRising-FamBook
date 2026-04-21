@@ -41,6 +41,13 @@ internal class CanvasService
 
     internal CanvasService(UICanvasBase canvas)
     {
+        // Ensure static state from any previous instance is reset so the update loop
+        // and UI build behave correctly after reconnects / scene reloads.
+        _killSwitch = false;
+        _ready = false;
+        _bookOpen = false;
+        _cards.Clear();
+
         _bottomBarCanvas = canvas.BottomBarParent.gameObject.GetComponent<Canvas>();
         _layer = _bottomBarCanvas.gameObject.layer;
 

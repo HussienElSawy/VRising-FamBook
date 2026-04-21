@@ -55,6 +55,11 @@ internal static class DataService
         @"^<color=white>(.+)</color>:$",
         RegexOptions.Compiled);
 
+    // Box selected confirmation: Box Selected - <color=white>boxN</color>
+    static readonly Regex _boxSelectedRx = new(
+        @"^Box Selected - <color=white>box(\d+)</color>$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     // Familiar line (no shiny):   <color=yellow>N</color>| <color=green>Name</color> [<color=white>level</color>][optional prestige]
     // Familiar line (with shiny): <color=yellow>N</color>| <color=green>Name</color><color=#HEX>*</color> [<color=white>level</color>][optional prestige]
     static readonly Regex _famLineRx = new(
@@ -128,7 +133,14 @@ internal static class DataService
         if (Time.realtimeSinceStartup > _responseDeadline) return false;
 
         // Silently consume Bloodcraft's "Box Selected" confirmation (.fam cb response)
-        if (raw.StartsWith("Box Selected")) return true;
+        var selMatch = _boxSelectedRx.Match(raw);
+        if (selMatch.Success)
+        {
+            int parsed = ParseInt(selMatch.Groups[1].Value);
+            if (parsed > 0) CurrentBoxIndex = parsed - 1;
+            Core.Log.LogInfo($"[FamBook] Box selected: {CurrentBoxIndex + 1}");
+            return true;
+        }
 
         // 1. Familiar entry line?
         var famMatch = _famLineRx.Match(raw);
