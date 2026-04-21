@@ -88,7 +88,8 @@ internal class CanvasService
             {
                 DataService.FinalizeIfExpired();
                 DataService.FinalizeListIfExpired();
-n                // If we've just finalized a box list, initialize current listed index so Next/Prev open boxes correctly.
+
+                // If we've just finalized a box list, initialize current listed index so Next/Prev open boxes correctly.
                 if (_showingBoxList && _currentListedBoxIndex == -1 && DataService.LastListedBoxNames.Count > 0)
                 {
                     _currentListedBoxIndex = 0;
@@ -357,31 +358,25 @@ internal class CanvasService
     {
         if (_showingBoxList)
         {
-            // If we have a maintained list, navigate boxes; otherwise page the UI.
+            // Page the boxes list (10 per page)
             int total = DataService.LastListedBoxNames.Count;
-            if (total > 0)
-            {
-                if (_currentListedBoxIndex <= 0)
-                {
-                    // already at first, clamp
-                    _currentListedBoxIndex = 0;
-                }
-                else
-                {
-                    _currentListedBoxIndex--;
-                }
-
-                // Open the selected box
-                OpenBoxByIndex(_currentListedBoxIndex);
-                return;
-            }
-
-            // fallback to paging
+            int maxPage = Math.Max(0, (total - 1) / MAX_CARDS);
             if (_boxListPage > 0)
             {
                 _boxListPage--;
                 RefreshBookPage();
             }
+            return;
+        }
+
+        // When viewing a specific box, navigate through the captured list if available.
+        var list = DataService.LastListedBoxNames;
+        if (list != null && list.Count > 0)
+        {
+            int idx = _currentListedBoxIndex >= 0 ? _currentListedBoxIndex : list.FindIndex(n => n == DataService.CurrentBoxName);
+            if (idx <= 0) return;
+            _currentListedBoxIndex = idx - 1;
+            OpenBoxByIndex(_currentListedBoxIndex);
             return;
         }
 
@@ -396,6 +391,7 @@ internal class CanvasService
     {
         if (_showingBoxList)
         {
+            // Page the boxes list (10 per page)
             int total = DataService.LastListedBoxNames.Count;
             int maxPage = Math.Max(0, (total - 1) / MAX_CARDS);
             if (_boxListPage < maxPage)
@@ -406,11 +402,41 @@ internal class CanvasService
             return;
         }
 
+        // When viewing a specific box, navigate through the captured list if available.
+        var list = DataService.LastListedBoxNames;
+        if (list != null && list.Count > 0)
+        {
+            int idx = _currentListedBoxIndex >= 0 ? _currentListedBoxIndex : list.FindIndex(n => n == DataService.CurrentBoxName);
+            if (idx < 0) idx = DataService.CurrentBoxIndex;
+            if (idx < list.Count - 1)
+            {
+                _currentListedBoxIndex = idx + 1;
+                OpenBoxByIndex(_currentListedBoxIndex);
+                return;
+            }
+        }
+
         DataService.CurrentBoxIndex++;
         RequestCurrentBox();
     }
 
     static void RequestCurrentBox() => CommandSender.RequestBoxData(DataService.CurrentBoxIndex);
+
+    static void OpenBoxByIndex(int idx)
+    {
+        if (idx < 0) return;
+        var list = DataService.LastListedBoxNames;
+        if (list == null || idx >= list.Count) return;
+
+        string boxName = list[idx];
+        _showingBoxList = false;
+        _boxListPage = 0;
+        _currentListedBoxIndex = idx;
+        CommandSender.Send($".fam cb {boxName}");
+        CommandSender.Send(".fam l");
+        DataService.BeginAwaitingResponse();
+        Core.Log.LogInfo($"[FamBook] Requested familiars for box '{boxName}' via Next/Prev.");
+    }
 
     static void RefreshBookPage()
     {
@@ -487,6 +513,8 @@ internal class CanvasService
         // When a box is clicked in the boxes list, request its familiars and switch to normal book view.
         _showingBoxList = false;
         _boxListPage = 0;
+        // Track the selected index so Next/Prev can open adjacent boxes from the list.
+        _currentListedBoxIndex = Math.Max(0, boxNumber - 1);
         // boxName may include commas or spaces if parsing joined lines; ensure we send just the box token if present.
         // If names are like "box1" it's fine; otherwise send as-is.
         CommandSender.Send($".fam cb {boxName}");
@@ -505,10 +533,13 @@ internal class CanvasService
         Destroy(_bookPanel); _bookPanel = null;
         _cardsContainer = null;
         _cards.Clear();
-        // Reset boxes UI state
+
+        // Reset boxes UI state
         _showingBoxList = false;
         _boxListPage = 0;
-        DataService.Reset();
+        _currentListedBoxIndex = -1;
+
+        DataService.Reset();
         CommandSender.Reset();
 
         Core.Log.LogInfo("[FamBook] State reset.");

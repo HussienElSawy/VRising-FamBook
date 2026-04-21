@@ -5,7 +5,7 @@
 		<ImplicitUsings>enable</ImplicitUsings>
 		<BepInExPluginGuid>com.fambook.vrising</BepInExPluginGuid>
 		<AssemblyName>FamBook</AssemblyName>
-		<Version>1.5.1</Version>
+		<Version>2.1.1</Version>
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 		<EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
 		<LangVersion>preview</LangVersion>
