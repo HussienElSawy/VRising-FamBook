@@ -414,7 +414,42 @@ internal static class DataService
             return true;
         }
 
-        // 2. Box header line?
+        // 2. Familiar entry line? (normal and fallback)
+        var famMatch = _famLineRx.Match(raw);
+        if (famMatch.Success)
+        {
+            string name       = famMatch.Groups[1].Value;
+            string shinyColor = famMatch.Groups[2].Success ? famMatch.Groups[2].Value : string.Empty;
+            int    level      = ParseInt(famMatch.Groups[3].Value);
+            int    prestige   = famMatch.Groups[4].Success ? ParseInt(famMatch.Groups[4].Value) : 0;
+
+            _pendingEntries.Add(new FamiliarEntry(name, level, prestige, shinyColor));
+            _responseDeadline = Time.realtimeSinceStartup + EXTEND_EACH;
+            Core.Log.LogInfo($"[FamBook] Parsed familiar: {name} Lv{level} P{prestige} shiny={shinyColor.Length > 0}");
+            return true;
+        }
+
+        // Fallback: try tag-stripped parse for varied server formatting when a '|' is present.
+        if (raw.Contains("|"))
+        {
+            string stripped = StripTags(raw);
+            var m2 = System.Text.RegularExpressions.Regex.Match(stripped, @"^\s*\d+\|\s*(.+?)\s*(\*)?\s*\[(\d+)\](?:\[(\d+)\])?\s*$");
+            if (m2.Success)
+            {
+                string name = m2.Groups[1].Value.Trim();
+                bool isShiny = m2.Groups[2].Success && m2.Groups[2].Value == "*";
+                int level = ParseInt(m2.Groups[3].Value);
+                int prestige = m2.Groups[4].Success ? ParseInt(m2.Groups[4].Value) : 0;
+                string shinyColor = string.Empty; // no color info available from stripped text
+
+                _pendingEntries.Add(new FamiliarEntry(name, level, prestige, shinyColor));
+                _responseDeadline = Time.realtimeSinceStartup + EXTEND_EACH;
+                Core.Log.LogInfo($"[FamBook] Parsed familiar (fallback): {name} Lv{level} P{prestige} shiny={isShiny}");
+                return true;
+            }
+        }
+
+        // 3) Box header line?
         var hdrMatch = _boxHeaderRx.Match(raw);
         if (hdrMatch.Success)
         {

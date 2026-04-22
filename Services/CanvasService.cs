@@ -324,6 +324,8 @@ internal class CanvasService
     {
         // Open the book and request the server's list of boxes. Responses will be intercepted and parsed.
         OpenBook();
+        // Ensure we are not left showing the VBlood UI from a previous view.
+        _showingVBloodList = false;
         _showingBoxList = true;
         _boxListPage = 0;
         CommandSender.Send(".fam listboxes");
@@ -345,7 +347,8 @@ internal class CanvasService
         // Ensure Vblood pages loaded and refresh UI
         DataService.LoadVbloodPages();
         RefreshBookPage();
-        // Start scanning page 0 immediately (guarded inside coroutine)
+        // Reset scanning flag in case a previous scan was left active, then start scan for page 0.
+        _vbloodScanning = false;
         Core.StartCoroutine(VBloodScanPage(_vbloodPage));
     }
 
@@ -367,6 +370,9 @@ internal class CanvasService
         var page = pages[pageIndex];
         for (int i = 0; i < page.Count; i++)
         {
+            // bail out if the user closed the book or switched view away from VBlood
+            if (!_bookOpen || !_showingVBloodList) break;
+
             string vb = page[i];
             // Skip if already checked
             if (DataService.VbloodResults.ContainsKey(vb))
@@ -375,11 +381,14 @@ internal class CanvasService
             CommandSender.Send($".fam s \"{vb}\"");
             DataService.BeginAwaitingSearch(vb);
 
-            // wait for result or timeout
+            // wait for result or timeout, but allow early exit when book closed / view changed
             while (DataService.AwaitingSearch)
             {
+                if (!_bookOpen || !_showingVBloodList) break;
                 yield return WaitForSeconds;
             }
+
+            if (!_bookOpen || !_showingVBloodList) break;
 
             // refresh UI to show result
             RefreshBookPage();
@@ -400,6 +409,7 @@ internal class CanvasService
         _bookOpen = true;
         _bookPanel?.SetActive(true);
         // Default to showing the boxes list when opening the FamBook UI.
+        _showingVBloodList = false;
         _showingBoxList = true;
         _boxListPage = 0;
         CommandSender.Send(".fam listboxes");
@@ -410,6 +420,9 @@ internal class CanvasService
     {
         _bookOpen = false;
         _bookPanel?.SetActive(false);
+        // When closing the UI, stop any ongoing VBlood scanning and clear the VBlood view flag.
+        _showingVBloodList = false;
+        _vbloodScanning = false;
     }
 
     static void OnPrevPage()
@@ -665,9 +678,12 @@ internal class CanvasService
         _cardsContainer = null;
         _cards.Clear();
 
-        // Reset boxes UI state
+        // Reset boxes & VBlood UI state
         _showingBoxList = false;
+        _showingVBloodList = false;
         _boxListPage = 0;
+        _vbloodPage = 0;
+        _vbloodScanning = false;
         _currentListedBoxIndex = -1;
 
         DataService.Reset();
