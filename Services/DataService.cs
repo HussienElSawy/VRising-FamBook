@@ -64,9 +64,14 @@ internal static class DataService
 
     public static bool TryGetVbloodResult(string vbName, out string value)
     {
-        value = "";
+        value = string.Empty;
         if (string.IsNullOrWhiteSpace(vbName)) return false;
-        return VbloodResults.TryGetValue(NormalizeVbloodKey(vbName), out value);
+        if (VbloodResults.TryGetValue(NormalizeVbloodKey(vbName), out string? tmp))
+        {
+            value = tmp ?? string.Empty;
+            return true;
+        }
+        return false;
     }
     public static readonly System.Collections.Generic.List<System.Collections.Generic.List<string>> VbloodPages = new();
     public static int PendingBindFamiliarNumber { get; private set; } = 0;

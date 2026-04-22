@@ -582,7 +582,7 @@ internal class CanvasService
                     else if (string.Equals(rawResult, "not owned", StringComparison.OrdinalIgnoreCase)) result = "<color=#AAAAAA>not owned</color>";
                     else if (string.Equals(rawResult, "unknown", StringComparison.OrdinalIgnoreCase)) result = "<color=#FFCC00>unknown</color>";
                     else result = $"Box: {rawResult}";
-                    _cards[i].UpdateVBlood(vb, result, (n, name) => { });
+                    _cards[i].UpdateVBlood(vb, result, OnVBloodCardClicked);
                     _cards[i].SetVisible(true);
                 }
                 else _cards[i].SetVisible(false);
@@ -645,6 +645,13 @@ internal class CanvasService
         CommandSender.Send(".fam l");
         DataService.BeginAwaitingResponse();
         Core.Log.LogInfo($"[FamBook] Requested familiars for box '{boxName}' via button.");
+    }
+
+    static void OnVBloodCardClicked(int unused, string vbloodName)
+    {
+        if (string.IsNullOrWhiteSpace(vbloodName)) return;
+        CommandSender.Send($".fam sb \"{vbloodName}\"");
+        Core.Log.LogInfo($"[FamBook] Sent .fam sb \"{vbloodName}\" via VBlood card click.");
     }
 
     public static void ResetState()
