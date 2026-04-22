@@ -33,7 +33,7 @@ internal static class ClientChatSystemPatch
     static void OnUpdate_Prefix(ClientChatSystem __instance)
     {
         if (!Core.HasInitialized) return;
-        if (!Services.DataService.AwaitingResponse && !Services.DataService.AwaitingBindAttempt && !Services.DataService.AwaitingListBoxes) return;
+        if (!Services.DataService.AwaitingResponse && !Services.DataService.AwaitingBindAttempt && !Services.DataService.AwaitingListBoxes && !Services.DataService.AwaitingSearch) return;
 
         NativeArray<Entity> entities =
             __instance._ReceiveChatMessagesQuery.ToEntityArray(Allocator.Temp);

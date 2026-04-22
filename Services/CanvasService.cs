@@ -37,7 +37,13 @@ internal class CanvasService
     static GameObject? _cardsContainer;
     static TextMeshProUGUI? _pageLabel;
 
-    static readonly System.Collections.Generic.List<FamiliarCard> _cards = [];
+    static readonly System.Collections.Generic.List<FamiliarCard> _cards = new();
+
+    // VBlood UI state
+    static bool _showingVBloodList = false;
+    static int _vbloodPage = 0; // 0-based
+    // When true, a scan coroutine is running for the current page
+    static bool _vbloodScanning = false;
 
     // UI state for showing server-listed boxes (paginated)
     static bool _showingBoxList = false;
@@ -326,9 +332,61 @@ internal class CanvasService
 
     static void OnVBloodClicked()
     {
-        // Send a vblood command — server/mod handlers can respond as needed
-        CommandSender.Send(".vblood");
-        Core.Log.LogInfo("[FamBook] VBlood command sent via button.");
+        // Open the book UI without requesting server listboxes (avoid sending .fam listboxes)
+        _bookOpen = true;
+        _bookPanel?.SetActive(true);
+
+        // Show VBlood UI
+        _showingBoxList = false;
+        _showingVBloodList = true;
+        _boxListPage = 0;
+        _vbloodPage = 0;
+
+        // Ensure Vblood pages loaded and refresh UI
+        DataService.LoadVbloodPages();
+        RefreshBookPage();
+        // Start scanning page 0 immediately (guarded inside coroutine)
+        Core.StartCoroutine(VBloodScanPage(_vbloodPage));
+    }
+
+    static System.Collections.IEnumerator VBloodScanPage(int pageIndex)
+    {
+        if (_vbloodScanning) yield break;
+        _vbloodScanning = true;
+
+        var pages = DataService.VbloodPages;
+        if (pages == null || pages.Count == 0 || pageIndex < 0 || pageIndex >= pages.Count)
+        {
+            _vbloodScanning = false;
+            yield break;
+        }
+
+        _vbloodPage = pageIndex;
+        RefreshBookPage();
+
+        var page = pages[pageIndex];
+        for (int i = 0; i < page.Count; i++)
+        {
+            string vb = page[i];
+            // Skip if already checked
+            if (DataService.VbloodResults.ContainsKey(vb))
+                continue;
+
+            CommandSender.Send($".fam s \"{vb}\"");
+            DataService.BeginAwaitingSearch(vb);
+
+            // wait for result or timeout
+            while (DataService.AwaitingSearch)
+            {
+                yield return WaitForSeconds;
+            }
+
+            // refresh UI to show result
+            RefreshBookPage();
+            yield return WaitForSeconds;
+        }
+
+        _vbloodScanning = false;
     }
 
     static void OnIconClicked()
@@ -369,6 +427,20 @@ internal class CanvasService
             return;
         }
 
+        // When viewing VBlood, go to previous VBlood page and scan it.
+        if (_showingVBloodList)
+        {
+            var pages = DataService.VbloodPages;
+            int total = pages?.Count ?? 0;
+            if (_vbloodPage > 0)
+            {
+                _vbloodPage--;
+                RefreshBookPage();
+                Core.StartCoroutine(VBloodScanPage(_vbloodPage));
+            }
+            return;
+        }
+
         // When viewing a specific box, navigate through the captured list if available.
         var list = DataService.LastListedBoxNames;
         if (list != null && list.Count > 0)
@@ -398,6 +470,20 @@ internal class CanvasService
             {
                 _boxListPage++;
                 RefreshBookPage();
+            }
+            return;
+        }
+
+        // When viewing VBlood, go to next VBlood page and scan it.
+        if (_showingVBloodList)
+        {
+            var pages = DataService.VbloodPages;
+            int total = pages?.Count ?? 0;
+            if (_vbloodPage < total - 1)
+            {
+                _vbloodPage++;
+                RefreshBookPage();
+                Core.StartCoroutine(VBloodScanPage(_vbloodPage));
             }
             return;
         }
@@ -469,9 +555,47 @@ internal class CanvasService
             return;
         }
 
+        // VBlood list view
+        if (_showingVBloodList)
+        {
+            var pages = DataService.VbloodPages;
+            if (pages == null || pages.Count == 0)
+            {
+                if (_pageLabel != null) _pageLabel.SetText("<color=#CCBBAA>No VBlood pages loaded</color>");
+                for (int i = 0; i < _cards.Count; i++) _cards[i].SetVisible(false);
+                return;
+            }
+
+            int pageIndex = Math.Max(0, Math.Min(_vbloodPage, pages.Count - 1));
+            var page = pages[pageIndex];
+
+            if (_pageLabel != null) _pageLabel.SetText($"<color=#CCBBAA>VBloods page {pageIndex + 1} of {pages.Count}</color>");
+
+            for (int i = 0; i < _cards.Count; i++)
+            {
+                if (i < page.Count)
+                {
+                    string vb = page[i];
+                    if (!DataService.TryGetVbloodResult(vb, out string rawResult)) rawResult = "...";
+                    string result;
+                    if (rawResult == "...") result = rawResult;
+                    else if (string.Equals(rawResult, "not owned", StringComparison.OrdinalIgnoreCase)) result = "<color=#AAAAAA>not owned</color>";
+                    else if (string.Equals(rawResult, "unknown", StringComparison.OrdinalIgnoreCase)) result = "<color=#FFCC00>unknown</color>";
+                    else result = $"Box: {rawResult}";
+                    _cards[i].UpdateVBlood(vb, result, (n, name) => { });
+                    _cards[i].SetVisible(true);
+                }
+                else _cards[i].SetVisible(false);
+            }
+
+            Core.Log.LogInfo($"[FamBook] VBlood page refreshed: {pageIndex + 1}/{pages.Count}");
+            return;
+        }
+
+        // Default: show familiars for current box
         int boxIdx = DataService.CurrentBoxIndex;
 
-        System.Collections.Generic.List<FamiliarEntry> familiars = [];
+        System.Collections.Generic.List<FamiliarEntry> familiars = new System.Collections.Generic.List<FamiliarEntry>();
         string boxTitle = DataService.CurrentBoxName;
         if (string.IsNullOrEmpty(boxTitle)) boxTitle = $"Box {boxIdx + 1}";
 
@@ -629,7 +753,16 @@ internal sealed class FamiliarCard
         _nameText.SetText($"<color=#90EE90>{boxName}</color>");
         _infoText.SetText($"# {boxNumber}");
         _button.onClick.RemoveAllListeners();
-        _button.onClick.AddListener((UnityAction)(() => onClick(boxNumber, boxName)));
+        _button.onClick.AddListener((UnityAction)(() => onClick(boxNumber, boxName)));    
+    }
+
+    // Update card for showing vblood entries (name + result)
+    public void UpdateVBlood(string vbloodName, string rightText, Action<int, string> onClick)
+    {
+        _nameText.SetText($"<color=#90EE90>{vbloodName}</color>");
+        _infoText.SetText(rightText);
+        _button.onClick.RemoveAllListeners();
+        _button.onClick.AddListener((UnityAction)(() => onClick(0, vbloodName)));
     }
 
     public void SetVisible(bool v) => _root.SetActive(v);

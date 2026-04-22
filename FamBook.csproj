@@ -5,7 +5,7 @@
 		<ImplicitUsings>enable</ImplicitUsings>
 		<BepInExPluginGuid>com.fambook.vrising</BepInExPluginGuid>
 		<AssemblyName>FamBook</AssemblyName>
-		<Version>2.1.1</Version>
+		<Version>3.0.0</Version>
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 		<EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
 		<LangVersion>preview</LangVersion>
@@ -32,4 +32,7 @@
 		      Condition="Exists('D:\Steam\steamapps\common\VRising\BepInEx\plugins')" />
 	</Target>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Services\vbloods.json" />
+  </ItemGroup>
 </Project>

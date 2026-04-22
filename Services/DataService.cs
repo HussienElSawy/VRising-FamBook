@@ -28,7 +28,7 @@ internal static class DataService
     public static int    CurrentBoxIndex { get; set; }  = 0;
     public static string CurrentBoxName  { get; private set; } = string.Empty;
 
-    public static readonly Dictionary<int, BoxData> Boxes = [];
+    public static readonly System.Collections.Generic.Dictionary<int, BoxData> Boxes = new();
 
     public static bool IsDirty { get; set; } = false;
 
@@ -37,17 +37,38 @@ internal static class DataService
     public static bool AwaitingResponse { get; private set; } = false;
 
     static float _responseDeadline;
-    static readonly List<FamiliarEntry> _pendingEntries = [];
+    static readonly System.Collections.Generic.List<FamiliarEntry> _pendingEntries = new();
     static string _pendingBoxName = string.Empty;
 
     // ── List boxes state ──────────────────────────────────────────────────────
     public static bool AwaitingListBoxes { get; private set; } = false;
-    static readonly List<string> _pendingBoxNames = [];
-    public static readonly List<string> LastListedBoxNames = [];
+    static readonly System.Collections.Generic.List<string> _pendingBoxNames = new();
+    public static readonly System.Collections.Generic.List<string> LastListedBoxNames = new();
 
     // ── Bind attempt state ────────────────────────────────────────────────────
 
     public static bool AwaitingBindAttempt { get; private set; } = false;
+
+    // ── Search (.fam s) state ─────────────────────────────────────────────────
+    public static bool AwaitingSearch { get; private set; } = false;
+    static string _pendingSearchName = string.Empty;
+    public static readonly Dictionary<string, string> VbloodResults = new();
+
+    static string NormalizeVbloodKey(string s)
+    {
+        if (s == null) return string.Empty;
+        // collapse whitespace, trim, case-insensitive keying
+        var k = System.Text.RegularExpressions.Regex.Replace(s, "\\s+", " ").Trim();
+        return k.ToLowerInvariant();
+    }
+
+    public static bool TryGetVbloodResult(string vbName, out string value)
+    {
+        value = "";
+        if (string.IsNullOrWhiteSpace(vbName)) return false;
+        return VbloodResults.TryGetValue(NormalizeVbloodKey(vbName), out value);
+    }
+    public static readonly System.Collections.Generic.List<System.Collections.Generic.List<string>> VbloodPages = new();
     public static int PendingBindFamiliarNumber { get; private set; } = 0;
 
     const float BASE_WINDOW = 3.0f;  // seconds to wait for first message
@@ -111,6 +132,104 @@ internal static class DataService
     {
         AwaitingBindAttempt = false;
         PendingBindFamiliarNumber = 0;
+    }
+
+    /// <summary>Begin awaiting the server's response to a .fam s search</summary>
+    public static void BeginAwaitingSearch(string name)
+    {
+        _pendingSearchName = name;
+        AwaitingSearch = true;
+        _responseDeadline = Time.realtimeSinceStartup + BASE_WINDOW;
+        Core.Log.LogInfo($"[FamBook] Awaiting .fam s response for '{name}'...");
+    }
+
+    /// <summary>Load VBlood pages from vblods.json (multiple fallbacks).</summary>
+    public static void LoadVbloodPages()
+    {
+        VbloodPages.Clear();
+        VbloodResults.Clear();
+
+        string assemblyDir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) ?? System.AppDomain.CurrentDomain.BaseDirectory;
+        string baseDir = System.AppDomain.CurrentDomain.BaseDirectory;
+        string cwd = System.IO.Directory.GetCurrentDirectory();
+        string[] candidates = new string[] {
+            System.IO.Path.Combine(assemblyDir, "vbloods.json"),
+            System.IO.Path.Combine(assemblyDir, "Services", "vbloods.json"),
+            System.IO.Path.Combine(baseDir, "vbloods.json"),
+            System.IO.Path.Combine(baseDir, "Services", "vbloods.json"),
+            System.IO.Path.Combine(cwd, "vbloods.json"),
+            System.IO.Path.Combine(cwd, "Services", "vbloods.json"),
+        };
+
+        // Debug: log candidate locations so users can diagnose why the file wasn't found.
+        Core.Log.LogInfo($"[FamBook] Searching vbloods.json candidates: assemblyDir={assemblyDir}, baseDir={baseDir}, cwd={cwd}");
+
+        string? found = null;
+        foreach (var c in candidates)
+        {
+            if (System.IO.File.Exists(c)) { found = c; break; }
+        }
+
+        if (found == null)
+        {
+            // Try embedded resource inside the DLL (Services/vbloods.json)
+            var asm = System.Reflection.Assembly.GetExecutingAssembly();
+            string resourceName = "FamBook.Services.vbloods.json";
+            using var rsrc = asm.GetManifestResourceStream(resourceName);
+            if (rsrc != null)
+            {
+                try
+                {
+                    using var reader = new System.IO.StreamReader(rsrc);
+                    var txt = reader.ReadToEnd();
+                    using var doc = System.Text.Json.JsonDocument.Parse(txt);
+                    var root = doc.RootElement;
+                    foreach (var prop in root.EnumerateObject())
+                    {
+                        if (prop.Value.ValueKind == System.Text.Json.JsonValueKind.Array)
+                        {
+                            var page = new System.Collections.Generic.List<string>();
+                            foreach (var el in prop.Value.EnumerateArray())
+                                page.Add(el.GetString() ?? string.Empty);
+                            VbloodPages.Add(page);
+                        }
+                    }
+                    Core.Log.LogInfo($"[FamBook] Loaded {VbloodPages.Count} VBlood pages from embedded resource ({resourceName}).");
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    Core.Log.LogWarning($"[FamBook] Failed to load embedded vbloods.json: {ex.Message}");
+                    return;
+                }
+            }
+
+            Core.Log.LogWarning("[FamBook] vbloods.json not found; VBlood pages empty.");
+            return;
+        }
+
+        try
+        {
+            var txt = System.IO.File.ReadAllText(found);
+            using var doc = System.Text.Json.JsonDocument.Parse(txt);
+            var root = doc.RootElement;
+            foreach (var prop in root.EnumerateObject())
+            {
+                if (prop.Value.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    var page = new System.Collections.Generic.List<string>();
+                    foreach (var el in prop.Value.EnumerateArray())
+                        page.Add(el.GetString() ?? string.Empty);
+                    VbloodPages.Add(page);
+                }
+            }
+
+            Core.Log.LogInfo($"[FamBook] Loaded {VbloodPages.Count} VBlood pages from {found}.");
+        }
+        catch (Exception ex)
+        {
+            Core.Log.LogWarning($"[FamBook] Failed to load vbloods.json: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -202,6 +321,49 @@ internal static class DataService
             return t;
         }
 
+        // Handle search-only responses even when not awaiting a full .fam l response.
+        // This allows .fam s queries to be handled without setting AwaitingResponse.
+        if (AwaitingSearch)
+        {
+            // Example server reply: "Matching familiar(s) found in: <color=white>box12</color>"
+            // Or: "No matching familiar found" / "Couldn't find matching familiar"
+            string s = StripTags(raw);
+            if (s.IndexOf("Matching familiar", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                // extract box name after colon
+                var parts = s.Split(':');
+                if (parts.Length >= 2)
+                {
+                    string boxed = parts[1].Trim();
+                    // boxed may be like "box12" or a name
+                    var pending = _pendingSearchName;
+                    VbloodResults[NormalizeVbloodKey(pending)] = boxed;
+                    Core.Log.LogInfo($"[FamBook] Search result: {pending} -> {boxed}");
+                }
+                else
+                {
+                    var pending = _pendingSearchName;
+                    VbloodResults[NormalizeVbloodKey(pending)] = "unknown";
+                }
+
+                _pendingSearchName = string.Empty;
+                AwaitingSearch = false;
+                IsDirty = true;
+                return true;
+            }
+
+            if (s.IndexOf("couldn't find", System.StringComparison.OrdinalIgnoreCase) >= 0 || s.IndexOf("no matching", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                var pending = _pendingSearchName;
+                VbloodResults[NormalizeVbloodKey(pending)] = "not owned";
+                Core.Log.LogInfo($"[FamBook] Search result: {pending} -> not owned");
+                _pendingSearchName = string.Empty;
+                AwaitingSearch = false;
+                IsDirty = true;
+                return true;
+            }
+        }
+
         // 3) Normal .fam l response handling
         if (!AwaitingResponse) return false;
         if (Time.realtimeSinceStartup > _responseDeadline) return false;
@@ -231,21 +393,19 @@ internal static class DataService
                 _pendingBoxName = selName;
                 Core.Log.LogInfo($"[FamBook] Box selected: {selName}");
             }
-            return true;
-        }
 
-        // 1. Familiar entry line?
-        var famMatch = _famLineRx.Match(raw);
-        if (famMatch.Success)
-        {
-            string name       = famMatch.Groups[1].Value;
-            string shinyColor = famMatch.Groups[2].Success ? famMatch.Groups[2].Value : string.Empty;
-            int    level      = ParseInt(famMatch.Groups[3].Value);
-            int    prestige   = famMatch.Groups[4].Success ? ParseInt(famMatch.Groups[4].Value) : 0;
+            // If a search was active, consume this as part of search results (some servers may echo selection)
+            if (AwaitingSearch && _pendingSearchName.Length > 0)
+            {
+                var pending = _pendingSearchName;
+                // record that the search resolved to this box name (use normalized key)
+                VbloodResults[NormalizeVbloodKey(pending)] = selName;
+                _pendingSearchName = string.Empty;
+                AwaitingSearch = false;
+                IsDirty = true;
+                Core.Log.LogInfo($"[FamBook] Search result: {pending} -> {selName}");
+            }
 
-            _pendingEntries.Add(new FamiliarEntry(name, level, prestige, shinyColor));
-            _responseDeadline = Time.realtimeSinceStartup + EXTEND_EACH;
-            Core.Log.LogInfo($"[FamBook] Parsed: {name} Lv{level} P{prestige} shiny={shinyColor.Length > 0}");
             return true;
         }
 
@@ -296,7 +456,7 @@ internal static class DataService
         if (Time.realtimeSinceStartup < _responseDeadline) return;
 
         int idx = CurrentBoxIndex;
-        Boxes[idx]  = new BoxData(idx, _pendingBoxName, [.._pendingEntries]);
+        Boxes[idx]  = new BoxData(idx, _pendingBoxName, new System.Collections.Generic.List<FamiliarEntry>(_pendingEntries));
         CurrentBoxName = _pendingBoxName;
 
         _pendingEntries.Clear();
@@ -363,12 +523,11 @@ internal sealed class FamiliarEntry(string name, int level, int prestige, string
 
     static string ToRoman(int num)
     {
-        (int val, string sym)[] map =
-        [
+        (int val, string sym)[] map = new (int val, string sym)[] {
             (1000,"M"),(900,"CM"),(500,"D"),(400,"CD"),
             (100,"C"),(90,"XC"),(50,"L"),(40,"XL"),
             (10,"X"),(9,"IX"),(5,"V"),(4,"IV"),(1,"I")
-        ];
+        };
         var sb = new System.Text.StringBuilder();
         foreach (var (val, sym) in map)
             while (num >= val) { sb.Append(sym); num -= val; }
