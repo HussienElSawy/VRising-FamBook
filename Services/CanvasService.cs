@@ -29,6 +29,9 @@ internal class CanvasService
     static bool _bookOpen;
     static bool _killSwitch;
 
+    /// <summary>True while the FamBook panel is visible. Used by the intercept patch to gate message processing.</summary>
+    internal static bool IsOpen => _bookOpen;
+
     static Canvas? _bottomBarCanvas;
     static int _layer;
 
@@ -423,6 +426,8 @@ internal class CanvasService
         // When closing the UI, stop any ongoing VBlood scanning and clear the VBlood view flag.
         _showingVBloodList = false;
         _vbloodScanning = false;
+        // Cancel all pending server-response states so the intercept patch stops immediately.
+        DataService.CancelAllAwaiting();
     }
 
     static void OnPrevPage()

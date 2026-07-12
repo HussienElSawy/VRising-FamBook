@@ -42,6 +42,7 @@ internal static class DataService
 
     // ── List boxes state ──────────────────────────────────────────────────────
     public static bool AwaitingListBoxes { get; private set; } = false;
+    static bool _listboxesHeaderSeen = false; // true once "Familiar Boxes:" header arrives
     static readonly System.Collections.Generic.List<string> _pendingBoxNames = new();
     public static readonly System.Collections.Generic.List<string> LastListedBoxNames = new();
 
@@ -264,66 +265,50 @@ internal static class DataService
         {
             if (Time.realtimeSinceStartup > _responseDeadline) return false;
 
-            // Strip any rich tags
             string stripped = StripTags(raw);
             if (string.IsNullOrWhiteSpace(stripped)) return false;
 
-            // Ignore header line
-            if (stripped.StartsWith("Familiar Boxes", System.StringComparison.OrdinalIgnoreCase))
+            // Gate: do NOT consume any message until the "Familiar Boxes:" header arrives.
+            // Messages before the header belong to other mods (e.g. Eclipse) and must be
+            // left untouched so they can be handled normally.
+            if (!_listboxesHeaderSeen)
             {
-                // extend deadline in case names follow
-                _responseDeadline = Time.realtimeSinceStartup + EXTEND_EACH;
-                return true;
+                if (stripped.StartsWith("Familiar Boxes", System.StringComparison.OrdinalIgnoreCase))
+                {
+                    _listboxesHeaderSeen = true;
+                    _responseDeadline = Time.realtimeSinceStartup + EXTEND_EACH;
+                    return true; // consume the header line
+                }
+                return false; // not our message yet
             }
 
-            // Ignore confirmation lines like "Box Selected - boxN"
+            // Header seen — now collect box names.
+
+            // Ignore "Box Selected" confirmations.
             if (_boxSelectedRx.IsMatch(raw)) return true;
 
-            // Ignore familiar lines (they contain '|') and box header lines ending with ':'
-            if (stripped.Contains("|") || stripped.EndsWith(":"))
-            {
-                _responseDeadline = Time.realtimeSinceStartup + EXTEND_EACH;
-                return true;
-            }
+            // Bloodcraft sends box names wrapped in <color=white>NAME</color> tags.
+            // Any line without that pattern is a message from another mod — pass it through.
+            if (!raw.Contains("<color=white>"))
+                return false;
 
-            // If the line contains comma-separated tokens, split and add each cleaned token
-            if (stripped.Contains(","))
+            // Extract every <color=white>NAME</color> match from this line.
+            var nameMatches = System.Text.RegularExpressions.Regex.Matches(
+                raw, @"<color=white>(.+?)</color>");
+            foreach (System.Text.RegularExpressions.Match nm in nameMatches)
             {
-                var parts = stripped.Split(',');
-                foreach (var p in parts)
+                var name = nm.Groups[1].Value.Trim();
+                if (!string.IsNullOrWhiteSpace(name) && !_pendingBoxNames.Contains(name))
                 {
-                    var tok = CleanBoxToken(p);
-                    if (!string.IsNullOrWhiteSpace(tok) && !_pendingBoxNames.Contains(tok))
-                    {
-                        _pendingBoxNames.Add(tok);
-                        Core.Log.LogInfo($"[FamBook] Parsed box token: {tok}");
-                    }
+                    _pendingBoxNames.Add(name);
+                    Core.Log.LogInfo($"[FamBook] Parsed box name: {name}");
                 }
+            }
 
+            if (nameMatches.Count > 0)
                 _responseDeadline = Time.realtimeSinceStartup + EXTEND_EACH;
-                return true;
-            }
 
-            // Single token line (likely a box name)
-            var token = CleanBoxToken(stripped);
-            if (!string.IsNullOrWhiteSpace(token) && !_pendingBoxNames.Contains(token))
-            {
-                _pendingBoxNames.Add(token);
-                Core.Log.LogInfo($"[FamBook] Parsed box token: {token}");
-            }
-
-            _responseDeadline = Time.realtimeSinceStartup + EXTEND_EACH;
             return true;
-        }
-
-        static string CleanBoxToken(string s)
-        {
-            var t = s.Trim();
-            // remove trailing colon or surrounding brackets
-            if (t.EndsWith(":")) t = t.Substring(0, t.Length - 1).Trim();
-            // strip any remaining tags or stray punctuation
-            t = System.Text.RegularExpressions.Regex.Replace(t, "[\n\r\t\\\"']", string.Empty).Trim();
-            return t;
         }
 
         // Handle search-only responses even when not awaiting a full .fam l response.
@@ -468,6 +453,7 @@ internal static class DataService
     public static void BeginAwaitingBoxList()
     {
         _pendingBoxNames.Clear();
+        _listboxesHeaderSeen = false;
         _responseDeadline = Time.realtimeSinceStartup + BASE_WINDOW;
         AwaitingListBoxes = true;
         Core.Log.LogInfo("[FamBook] Awaiting .fam listboxes response...");
@@ -512,6 +498,23 @@ internal static class DataService
     static int ParseInt(string s) =>
         int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out int v) ? v : 0;
 
+    /// <summary>Immediately cancels all pending server-response states.
+    /// Called when FamBook is closed so the intercept patch stops processing messages.</summary>
+    public static void CancelAllAwaiting()
+    {
+        AwaitingResponse        = false;
+        AwaitingBindAttempt     = false;
+        AwaitingListBoxes       = false;
+        AwaitingSearch          = false;
+        _listboxesHeaderSeen    = false;
+        _pendingEntries.Clear();
+        _pendingBoxName         = string.Empty;
+        _pendingBoxNames.Clear();
+        _pendingSearchName      = string.Empty;
+        PendingBindFamiliarNumber = 0;
+        Core.Log.LogInfo("[FamBook] All server-response interception cancelled (FamBook closed).");
+    }
+
     public static void Reset()
     {
         Boxes.Clear();
@@ -526,6 +529,7 @@ internal static class DataService
 
         // Clear listboxes state
         AwaitingListBoxes = false;
+        _listboxesHeaderSeen = false;
         _pendingBoxNames.Clear();
         LastListedBoxNames.Clear();
     }

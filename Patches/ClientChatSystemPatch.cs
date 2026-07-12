@@ -33,6 +33,8 @@ internal static class ClientChatSystemPatch
     static void OnUpdate_Prefix(ClientChatSystem __instance)
     {
         if (!Core.HasInitialized) return;
+        // Only intercept messages while FamBook is open.
+        if (!Services.CanvasService.IsOpen) return;
         if (!Services.DataService.AwaitingResponse && !Services.DataService.AwaitingBindAttempt && !Services.DataService.AwaitingListBoxes && !Services.DataService.AwaitingSearch) return;
 
         NativeArray<Entity> entities =

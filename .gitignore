@@ -1,6 +1,7 @@
 ## Build output
 bin/
 obj/
+*.sln
 
 ## NuGet packages
 *.user
@@ -13,3 +14,7 @@ obj/
 ## OS
 .DS_Store
 Thumbs.db
+
+## Others
+icon.*
+Names_VBloods.json
